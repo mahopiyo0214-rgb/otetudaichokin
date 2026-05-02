@@ -1,5 +1,4 @@
-# このリポジトリのルートを GitHub Pages で公開する（push するだけで URL ができる）
-# 参考: https://github.com/actions/starter-workflows/blob/main/pages/static.yml
+# GitHub Pages を「gh-pages ブランチ」に載せ替える方式（configure-pages の 404 を避ける）
 name: Deploy to GitHub Pages
 
 on:
@@ -8,9 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: "pages"
@@ -18,22 +15,19 @@ concurrency:
 
 jobs:
   deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
+      - name: Prepare site folder
+        run: |
+          mkdir -p _site
+          cp index.html style.css script.js japanese-holidays.min.js _site/
 
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Deploy to gh-pages branch
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          path: "."
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v5
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: _site
+          force_orphan: true

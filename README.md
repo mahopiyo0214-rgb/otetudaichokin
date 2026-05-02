@@ -116,10 +116,12 @@ git push
 
 ```
 お手伝いアプリ/
+├── .github/workflows/deploy-pages.yml  # GitHub Pages 自動デプロイ
 ├── index.html
 ├── style.css
 ├── script.js
 ├── japanese-holidays.min.js  # 日本の祝日判定 (MIT)
+├── .gitignore
 └── README.md
 ```
 

@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>お手伝い貯金</title>
+    <meta name="robots" content="noindex,nofollow" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="topbar-left">
+          <h1 class="title">お手伝い<span class="title-accent">貯金</span></h1>
+          <div id="monthLabel" class="month-label">よみこみちゅう…</div>
+        </div>
+        <div class="topbar-right">
+          <div class="summary">
+            <div class="summary-item">
+              <div class="summary-label">こんげつのかいすう</div>
+              <div id="totalCount" class="summary-value">0<span class="unit">かい</span></div>
+            </div>
+            <div class="summary-item summary-money">
+              <div class="summary-label">こんげつのきんがく</div>
+              <div id="totalMoney" class="summary-value">¥0</div>
+            </div>
+          </div>
+          <button id="historyBtn" class="icon-btn" type="button">
+            <span class="icon">📅</span>
+            <span class="icon-label">りれき</span>
+          </button>
+          <button id="settingsBtn" class="icon-btn" type="button">
+            <span class="icon">⚙️</span>
+            <span class="icon-label">せってい</span>
+          </button>
+        </div>
+      </header>
+
+      <main class="main">
+        <section class="chores">
+          <div id="choresGrid" class="chores-grid" aria-label="おてつだい こうもく"></div>
+        </section>
+
+        <section class="recent">
+          <h2 class="section-title">こんげつ やったこと</h2>
+          <ul id="recentList" class="recent-list"></ul>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" aria-live="polite"></div>
+
+    <!-- りれき -->
+    <div id="historyModal" class="modal" hidden>
+      <div class="modal-card">
+        <div class="modal-head">
+          <h2>つきごとの りれき</h2>
+          <button class="close-btn" type="button" data-close="historyModal" aria-label="とじる">×</button>
+        </div>
+        <div class="modal-body">
+          <div id="historyBody"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- せってい -->
+    <div id="settingsModal" class="modal" hidden>
+      <div class="modal-card">
+        <div class="modal-head">
+          <h2>せってい (おうちのひとよう)</h2>
+          <button class="close-btn" type="button" data-close="settingsModal" aria-label="とじる">×</button>
+        </div>
+        <div class="modal-body">
+          <p class="settings-help">
+            なまえ・えもじ・<strong>休日</strong>と<strong>へいじつ</strong>の きんがく（円）を かえられます。
+          </p>
+          <div id="settingsList" class="settings-list"></div>
+          <div class="settings-actions">
+            <button id="addChoreBtn" class="btn btn-primary" type="button">＋ こうもくを ふやす</button>
+            <button id="resetMonthBtn" class="btn btn-ghost" type="button">こんげつの きろくを けす</button>
+            <button id="resetAllBtn" class="btn btn-danger" type="button">すべての データを しょきか する</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- せいきゅうしょ -->
+    <div id="invoiceModal" class="modal" hidden>
+      <div class="modal-card invoice-card">
+        <div class="modal-head invoice-head">
+          <h2 id="invoiceMonthLine">おてつだい せいきゅうしょ</h2>
+          <button class="close-btn" type="button" data-close="invoiceModal" aria-label="とじる">×</button>
+        </div>
+        <div class="modal-body invoice-body">
+          <p id="invoiceLead" class="invoice-lead"></p>
+          <div class="invoice-paper">
+            <div class="invoice-meta">
+              <span>あて：おかあさん</span>
+              <span>いんしょう：おてつだいちょきん</span>
+            </div>
+            <div class="invoice-title-line">ごうけい <strong id="invoiceTotal">¥0</strong></div>
+            <div id="invoiceDetail" class="invoice-detail"></div>
+            <div id="invoicePaidLine" class="invoice-paid-line" hidden></div>
+            <div id="invoiceStamp" class="invoice-stamp"></div>
+            <p id="invoiceNote" class="invoice-note"></p>
+            <div id="invoicePayRow" class="invoice-pay-row">
+              <label class="invoice-pay-label" for="invoicePayInput">もらう きんがく</label>
+              <div class="invoice-pay-field">
+                <span class="invoice-pay-yen">¥</span>
+                <input id="invoicePayInput" class="invoice-pay-input" type="number" min="0" step="100" inputmode="numeric" />
+              </div>
+              <div id="invoiceQuick" class="invoice-quick"></div>
+            </div>
+            <div class="invoice-actions">
+              <button id="invoiceReceivedBtn" class="btn btn-primary" type="button">このきんがくを もらった</button>
+              <button id="invoiceCarryBtn" class="btn btn-ghost" type="button">のこりは 来月にくりこす</button>
+              <button id="invoiceWaiveBtn" class="btn btn-ghost" type="button">のこりは チャラにする</button>
+              <button id="invoiceLaterBtn" class="btn btn-ghost" type="button">あとで</button>
+              <button id="invoiceCloseBtn" class="btn btn-ghost" type="button" data-close="invoiceModal" hidden>とじる</button>
+              <button id="invoiceRedoBtn" class="btn btn-redo" type="button" hidden>↩︎ にゅうきんを やりなおす</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- かくにん -->
+    <div id="confirmModal" class="modal" hidden>
+      <div class="modal-card modal-small">
+        <div class="modal-head">
+          <h2>かくにん</h2>
+          <button class="close-btn" type="button" data-close="confirmModal" aria-label="とじる">×</button>
+        </div>
+        <div class="modal-body">
+          <div id="confirmText" class="confirm-text"></div>
+          <div class="confirm-actions">
+            <button id="confirmCancel" class="btn btn-ghost" type="button">やめる</button>
+            <button id="confirmOk" class="btn btn-danger" type="button">はい</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- かぞく げんてい ロック -->
+    <div id="familyGate" class="gate" hidden>
+      <div class="gate-card">
+        <div class="gate-title">かぞく げんてい</div>
+        <div class="gate-help">あいことば を いれてね</div>
+        <input id="gateInput" class="gate-input" type="text" inputmode="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
+        <button id="gateOk" class="btn btn-primary gate-btn" type="button">ひらく</button>
+        <div id="gateError" class="gate-error" hidden>ちがうよ。もういちど。</div>
+      </div>
+    </div>
+
+    <script src="./japanese-holidays.min.js"></script>
+    <script src="./script.js"></script>
+  </body>
+</html>
+

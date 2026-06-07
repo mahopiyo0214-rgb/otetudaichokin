@@ -22,7 +22,7 @@
 2. このフォルダでターミナルを開き、次を実行する（`<あなたのユーザー名>` と `<リポジトリ名>` を置き換え）。
 
 ```bash
-cd "/Users/wmba2026/Desktop/AIディレクターコース/shiori/お手伝いアプリ"
+cd "/Users/wmba2026/Desktop/AIディレクターコース/_個人/shiori/お手伝いアプリ"
 git init
 git branch -M main
 git add .

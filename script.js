@@ -10,6 +10,11 @@
 const LEGACY_HOLIDAY_RATE = 0.9;
 
 const STORAGE_KEY = "otetsudai-app-v1";
+const FAMILY_GATE_KEY = "otetsudai-family-unlocked";
+
+// かぞくだけで つかうための「あいことば」
+// ここを かえてから push すると、家族以外は ひらきにくくなります。
+const FAMILY_PASSCODE = "青森旅行";
 
 /** こうもくリストを あたらしい デフォルトに そろえるときの版 */
 const CHORE_SCHEMA_VERSION = 2;
@@ -38,6 +43,69 @@ function loadState() {
 
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+function isFamilyUnlocked() {
+  try {
+    return localStorage.getItem(FAMILY_GATE_KEY) === "1";
+  } catch (_) {
+    return false;
+  }
+}
+
+function setFamilyUnlocked() {
+  try {
+    localStorage.setItem(FAMILY_GATE_KEY, "1");
+  } catch (_) {
+    // ignore
+  }
+}
+
+function setupFamilyGate(startApp) {
+  const gate = document.querySelector("#familyGate");
+  if (!gate) {
+    startApp();
+    return;
+  }
+
+  if (isFamilyUnlocked()) {
+    gate.hidden = true;
+    startApp();
+    return;
+  }
+
+  const input = document.querySelector("#gateInput");
+  const ok = document.querySelector("#gateOk");
+  const err = document.querySelector("#gateError");
+  gate.hidden = false;
+
+  function tryUnlock() {
+    const v = (input && input.value ? input.value : "").trim();
+    if (v && v === FAMILY_PASSCODE) {
+      setFamilyUnlocked();
+      gate.hidden = true;
+      startApp();
+      return;
+    }
+    if (err) err.hidden = false;
+    if (input) input.select();
+  }
+
+  if (input) {
+    input.addEventListener("input", () => {
+      if (err) err.hidden = true;
+    });
+    input.addEventListener("keydown", (e) => {
+      // 日本語へんかんちゅうの Enter（へんかんかくてい）では はんていしない
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === "Enter") {
+        e.preventDefault();
+        tryUnlock();
+      }
+    });
+    queueMicrotask(() => input.focus());
+  }
+  if (ok) ok.addEventListener("click", tryUnlock);
 }
 
 let state = loadState() || {
@@ -105,24 +173,120 @@ function computeMonthBreakdown(monthKey) {
 }
 
 function getMonthTotalYen(monthKey) {
+  return billTotalYen(monthKey);
+}
+
+/**
+ * monthPayouts のデータを「部分入金」対応の形にそろえる。
+ * 新形式: { payments: [{ amount, ts }], waived: number, waivedAt: ts|null }
+ * 旧形式: { received, receivedAt, amountSnapshot } は payments 1件に変換。
+ */
+function normalizePayout(monthKey) {
+  let p = state.monthPayouts[monthKey];
+  if (!p) p = {};
+  if (!Array.isArray(p.payments)) {
+    p.payments = [];
+    if (p.received) {
+      p.payments.push({
+        amount: p.amountSnapshot != null ? p.amountSnapshot : 0,
+        ts: p.receivedAt != null ? p.receivedAt : Date.now(),
+      });
+    }
+  }
+  if (typeof p.waived !== "number") p.waived = 0;
+  if (p.waivedAt === undefined) p.waivedAt = null;
+  if (typeof p.carried !== "number") p.carried = 0; // この月から つぎの月へ くりこした額
+  if (p.carriedAt === undefined) p.carriedAt = null;
+  state.monthPayouts[monthKey] = p;
+  return p;
+}
+
+/** monthKey を delta か月 ずらす（年またぎ対応） */
+function shiftMonthKey(monthKey, delta) {
+  let [y, m] = monthKey.split("-").map(Number);
+  m += delta;
+  while (m < 1) { m += 12; y -= 1; }
+  while (m > 12) { m -= 12; y += 1; }
+  return `${y}-${String(m).padStart(2, "0")}`;
+}
+
+/** つぎの月の「ひょうじよう」ラベル（くりこし先） */
+function nextMonthLabel(monthKey) {
+  return formatMonthLabel(shiftMonthKey(monthKey, 1));
+}
+
+/** せんげつから この月へ くりこされてきた額 */
+function carryInYen(monthKey) {
+  const prev = state.monthPayouts[shiftMonthKey(monthKey, -1)];
+  return prev && typeof prev.carried === "number" ? prev.carried : 0;
+}
+
+/** お手伝いだけの合計（くりこしをふくまない） */
+function choreTotalYen(monthKey) {
   return computeMonthBreakdown(monthKey).total;
 }
 
-function getPayout(monthKey) {
-  const p = state.monthPayouts[monthKey];
-  if (!p) return { received: false, receivedAt: null, amountSnapshot: null };
-  return {
-    received: !!p.received,
-    receivedAt: p.receivedAt != null ? p.receivedAt : null,
-    amountSnapshot: p.amountSnapshot != null ? p.amountSnapshot : null,
-  };
+/** せいきゅう合計＝お手伝い合計＋せんげつからのくりこし */
+function billTotalYen(monthKey) {
+  return choreTotalYen(monthKey) + carryInYen(monthKey);
 }
 
-function setPayoutReceived(monthKey, total) {
+/** そのつきの 入金じょうきょう（合計・もらったぶん・チャラ・くりこし・のこり・せいさんずみか） */
+function getPayoutInfo(monthKey) {
+  const carryIn = carryInYen(monthKey);
+  const choreTotal = choreTotalYen(monthKey);
+  const total = choreTotal + carryIn;
+  const p = normalizePayout(monthKey);
+  const paid = p.payments.reduce((s, x) => s + (Number(x.amount) || 0), 0);
+  const waived = Number(p.waived) || 0;
+  const carried = Number(p.carried) || 0;
+  const remaining = Math.max(0, total - paid - waived - carried);
+  const hasActivity = paid > 0 || waived > 0 || carried > 0;
+  const settled = hasActivity && remaining <= 0;
+  let lastTs = null;
+  if (p.payments.length) lastTs = p.payments[p.payments.length - 1].ts;
+  else if (p.carriedAt != null) lastTs = p.carriedAt;
+  else if (p.waivedAt != null) lastTs = p.waivedAt;
+  return { total, choreTotal, carryIn, paid, waived, carried, remaining, settled, hasActivity, payments: p.payments, lastTs };
+}
+
+/** いちぶ（または ぜんぶ）の にゅうきんを きろくする */
+function addPayment(monthKey, amount) {
+  const amt = Math.max(0, Math.round(Number(amount) || 0));
+  if (amt <= 0) return;
+  const p = normalizePayout(monthKey);
+  p.payments.push({ amount: amt, ts: Date.now() });
+  saveState();
+}
+
+/** のこりを「おまけ」でチャラにして せいさんずみにする */
+function waiveRemainder(monthKey) {
+  const info = getPayoutInfo(monthKey);
+  if (info.remaining <= 0) return;
+  const p = normalizePayout(monthKey);
+  p.waived = (Number(p.waived) || 0) + info.remaining;
+  p.waivedAt = Date.now();
+  saveState();
+}
+
+/** のこりを つぎの月へ くりこす（つぎの月の せいきゅうに のる） */
+function carryRemainder(monthKey) {
+  const info = getPayoutInfo(monthKey);
+  if (info.remaining <= 0) return;
+  const p = normalizePayout(monthKey);
+  p.carried = (Number(p.carried) || 0) + info.remaining;
+  p.carriedAt = Date.now();
+  saveState();
+}
+
+/** この月の 入金きろくを すべて けして やりなおす（くりこしも かいじょ） */
+function resetPayout(monthKey) {
   state.monthPayouts[monthKey] = {
-    received: true,
-    receivedAt: Date.now(),
-    amountSnapshot: total,
+    payments: [],
+    waived: 0,
+    waivedAt: null,
+    carried: 0,
+    carriedAt: null,
   };
   saveState();
 }
@@ -141,38 +305,102 @@ function findFirstUnpaidPastMonth() {
     .sort()
     .reverse();
   for (const k of keys) {
-    if (!getPayout(k).received) return k;
+    if (!getPayoutInfo(k).settled) return k;
   }
   return null;
 }
 
+/** キリのよい にゅうきんこうほ（のこりから 1000/500/100 きざみで きりさげ） */
+function quickPayCandidates(remaining) {
+  const set = new Set();
+  if (remaining > 0) set.add(remaining);
+  for (const step of [1000, 500, 100]) {
+    const v = Math.floor(remaining / step) * step;
+    if (v > 0) set.add(v);
+  }
+  return Array.from(set)
+    .filter((v) => v > 0 && v <= remaining)
+    .sort((a, b) => b - a)
+    .slice(0, 4);
+}
+
 function fillInvoiceModal(monthKey, opts = {}) {
-  const { total, detailHtml } = computeMonthBreakdown(monthKey);
-  const payout = getPayout(monthKey);
+  const { detailHtml } = computeMonthBreakdown(monthKey);
+  const info = getPayoutInfo(monthKey);
+  const total = info.total;
   $("#invoiceModal").dataset.targetMonth = monthKey;
   $("#invoiceMonthLine").textContent = `${formatMonthLabel(monthKey)} せいきゅう`;
   $("#invoiceTotal").textContent = formatYen(total);
-  $("#invoiceDetail").innerHTML = detailHtml || "<div>（ないようなし）</div>";
+  let detail = detailHtml || "<div>（ないようなし）</div>";
+  if (info.carryIn > 0) {
+    detail += `<div class="invoice-carryin">↩︎ せんげつからの くりこし <span class="amount">${formatYen(info.carryIn)}</span></div>`;
+  }
+  $("#invoiceDetail").innerHTML = detail;
   const lead = $("#invoiceLead");
   if (opts.isAuto) {
     lead.textContent = `${formatMonthLabel(monthKey)}のおてつだいおきゅうりょうが、まだのこっています。おかあさんに、このせいきゅうしょをみせてね。`;
   } else {
     lead.textContent = `${formatMonthLabel(monthKey)}のせいきゅうしょです。`;
   }
+
+  // もらったぶん・チャラ・のこり の行
+  const paidLine = $("#invoicePaidLine");
+  if (info.hasActivity) {
+    const parts = [];
+    if (info.paid > 0) parts.push(`<span class="paid-chip paid-chip-got">もらった ${formatYen(info.paid)}</span>`);
+    if (info.carried > 0) parts.push(`<span class="paid-chip paid-chip-carry">${nextMonthLabel(monthKey)}へ くりこし ${formatYen(info.carried)}</span>`);
+    if (info.waived > 0) parts.push(`<span class="paid-chip paid-chip-waive">おまけ ${formatYen(info.waived)}</span>`);
+    if (info.remaining > 0) parts.push(`<span class="paid-chip paid-chip-left">のこり ${formatYen(info.remaining)}</span>`);
+    paidLine.innerHTML = parts.join("");
+    paidLine.hidden = false;
+  } else {
+    paidLine.innerHTML = "";
+    paidLine.hidden = true;
+  }
+
   const stamp = $("#invoiceStamp");
   const note = $("#invoiceNote");
-  if (payout.received) {
+  if (info.settled) {
+    const extra = [];
+    if (info.carried > 0) extra.push(`${nextMonthLabel(monthKey)}へ ${formatYen(info.carried)}`);
+    if (info.waived > 0) extra.push(`おまけ ${formatYen(info.waived)}`);
+    const extraText = extra.length ? `（${extra.join("・")}）` : "";
     stamp.innerHTML =
-      `<span class="invoice-stamp-paid">にゅうきんずみ</span>` +
-      `<span class="invoice-stamp-date">${formatYen(payout.amountSnapshot ?? total)} をきろく（${formatReceivedDate(payout.receivedAt)}）</span>`;
-    note.textContent = "このつきのおきゅうりょうは、もらいおわっています。";
+      `<span class="invoice-stamp-paid">せいさんずみ</span>` +
+      `<span class="invoice-stamp-date">もらった ${formatYen(info.paid)}${extraText}・${formatReceivedDate(info.lastTs)}</span>`;
+    note.textContent = "このつきのおきゅうりょうは、せいさんおわっています。";
+  } else if (info.paid > 0) {
+    stamp.innerHTML =
+      `<span class="invoice-stamp-part">いちぶ にゅうきん</span>` +
+      `<span class="invoice-stamp-date">のこり ${formatYen(info.remaining)}</span>`;
+    note.textContent = "のこりを もらったら、また きんがくを いれて「もらった」をおしてね。";
   } else {
     stamp.innerHTML = `<span class="invoice-stamp-wait">みにゅうきん（まち）</span>`;
-    note.textContent = "おかねをうけとったら「おかねをもらった」をおしてね。";
+    note.textContent = "おかねをうけとったら、きんがくをいれて「もらった」をおしてね。";
   }
-  $("#invoiceReceivedBtn").hidden = payout.received;
-  $("#invoiceLaterBtn").hidden = payout.received;
-  $("#invoiceCloseBtn").hidden = !payout.received;
+
+  // 金額入力（デフォルトはのこり）・キリよくボタン
+  const payRow = $("#invoicePayRow");
+  const payInput = $("#invoicePayInput");
+  const quick = $("#invoiceQuick");
+  payRow.hidden = info.settled || total <= 0;
+  if (!payRow.hidden) {
+    payInput.value = String(info.remaining);
+    payInput.max = String(info.remaining);
+    quick.innerHTML = quickPayCandidates(info.remaining)
+      .map((v) => `<button type="button" class="quick-amt" data-amt="${v}">${formatYen(v)}</button>`)
+      .join("");
+  } else {
+    quick.innerHTML = "";
+  }
+
+  $("#invoiceReceivedBtn").hidden = info.settled || total <= 0;
+  $("#invoiceCarryBtn").hidden = info.settled || total <= 0 || info.remaining <= 0;
+  $("#invoiceWaiveBtn").hidden = info.settled || total <= 0 || info.remaining <= 0;
+  $("#invoiceLaterBtn").hidden = info.settled;
+  $("#invoiceCloseBtn").hidden = !info.settled;
+  // まちがえたときの やりなおし（なにか きろくが あるときだけ）
+  $("#invoiceRedoBtn").hidden = !info.hasActivity;
 }
 
 function openInvoiceModal(monthKey, opts = {}) {
@@ -410,15 +638,26 @@ function openHistory() {
     .filter((k) => state.records[k].length > 0)
     .map((k) => {
       const recs = state.records[k];
-      const { total, count, detailHtml } = computeMonthBreakdown(k);
-      const payout = getPayout(k);
+      const { count, detailHtml } = computeMonthBreakdown(k);
+      const info = getPayoutInfo(k);
+      const total = info.total;
       let payoutRow = "";
-      if (total > 0 || payout.received) {
-        if (payout.received) {
+      if (total > 0 || info.hasActivity) {
+        if (info.settled) {
+          const extra = [];
+          if (info.carried > 0) extra.push(`${nextMonthLabel(k)}へ ${formatYen(info.carried)}`);
+          if (info.waived > 0) extra.push(`おまけ ${formatYen(info.waived)}`);
+          const extraText = extra.length ? `（${extra.join("・")}）` : "";
           payoutRow = `<div class="history-payout">
-            <span class="payout-badge payout-badge-ok">にゅうきんずみ</span>
-            <span class="payout-meta">${formatYen(payout.amountSnapshot ?? total)} ・ ${formatReceivedDate(payout.receivedAt)}</span>
+            <span class="payout-badge payout-badge-ok">せいさんずみ</span>
+            <span class="payout-meta">もらった ${formatYen(info.paid)}${extraText} ・ ${formatReceivedDate(info.lastTs)}</span>
             <button type="button" class="btn-invoice-link" data-open-invoice="${k}">せいきゅうしょ</button>
+          </div>`;
+        } else if (info.paid > 0) {
+          payoutRow = `<div class="history-payout">
+            <span class="payout-badge payout-badge-part">いちぶ にゅうきん</span>
+            <span class="payout-meta">もらった ${formatYen(info.paid)} ・ のこり ${formatYen(info.remaining)}</span>
+            <button type="button" class="btn-invoice-link" data-open-invoice="${k}">せいきゅうしょをみる</button>
           </div>`;
         } else {
           payoutRow = `<div class="history-payout">
@@ -427,6 +666,9 @@ function openHistory() {
           </div>`;
         }
       }
+      const carryInNote = info.carryIn > 0
+        ? `<div class="history-carryin">↩︎ せんげつからの くりこし ${formatYen(info.carryIn)} ふくむ</div>`
+        : "";
       return `
         <div class="history-month">
           <h3>${formatMonthLabel(k)}</h3>
@@ -435,6 +677,7 @@ function openHistory() {
             <span class="money">${formatYen(total)}</span>
           </div>
           <div class="history-month-detail">${detailHtml}</div>
+          ${carryInNote}
           ${payoutRow}
         </div>
       `;
@@ -552,18 +795,77 @@ function setupEvents() {
     openInvoiceModal(mk, { isAuto: false });
   });
 
+  // キリよくボタン → 入力欄にセット
+  $("#invoiceQuick").addEventListener("click", (e) => {
+    const b = e.target.closest(".quick-amt");
+    if (!b) return;
+    const v = parseInt(b.dataset.amt, 10);
+    if (!Number.isNaN(v)) $("#invoicePayInput").value = String(v);
+  });
+
   $("#invoiceReceivedBtn").addEventListener("click", () => {
     const mk = $("#invoiceModal").dataset.targetMonth;
     if (!mk) return;
-    const { total } = computeMonthBreakdown(mk);
-    if (total <= 0) {
+    const info = getPayoutInfo(mk);
+    if (info.total <= 0) {
       $("#invoiceModal").hidden = true;
       return;
     }
-    setPayoutReceived(mk, total);
-    showToast("おかねをもらったことをきろくしたよ！");
-    $("#invoiceModal").hidden = true;
+    let amt = Math.max(0, Math.round(Number($("#invoicePayInput").value) || 0));
+    if (amt <= 0) {
+      showToast("きんがくを いれてね");
+      return;
+    }
+    if (amt > info.remaining) amt = info.remaining; // のこり以上は うけとらない
+    addPayment(mk, amt);
+    const after = getPayoutInfo(mk);
+    if (after.settled) {
+      showToast(`${formatYen(amt)} もらった！ぜんぶ せいさんできたよ`);
+      fillInvoiceModal(mk, { isAuto: false });
+    } else {
+      showToast(`${formatYen(amt)} もらった！のこり ${formatYen(after.remaining)}`);
+      fillInvoiceModal(mk, { isAuto: false });
+    }
     renderAll();
+  });
+
+  $("#invoiceCarryBtn").addEventListener("click", () => {
+    const mk = $("#invoiceModal").dataset.targetMonth;
+    if (!mk) return;
+    const info = getPayoutInfo(mk);
+    if (info.remaining <= 0) return;
+    confirmAsk(`のこり ${formatYen(info.remaining)} を ${nextMonthLabel(mk)} に くりこしますか？`, () => {
+      const amt = info.remaining;
+      carryRemainder(mk);
+      showToast(`のこり ${formatYen(amt)} を ${nextMonthLabel(mk)} に くりこしたよ`);
+      fillInvoiceModal(mk, { isAuto: false });
+      renderAll();
+    });
+  });
+
+  $("#invoiceWaiveBtn").addEventListener("click", () => {
+    const mk = $("#invoiceModal").dataset.targetMonth;
+    if (!mk) return;
+    const info = getPayoutInfo(mk);
+    if (info.remaining <= 0) return;
+    confirmAsk(`のこり ${formatYen(info.remaining)} を おまけ（チャラ）にしますか？`, () => {
+      const amt = info.remaining;
+      waiveRemainder(mk);
+      showToast(`のこり ${formatYen(amt)} を おまけにしたよ`);
+      fillInvoiceModal(mk, { isAuto: false });
+      renderAll();
+    });
+  });
+
+  $("#invoiceRedoBtn").addEventListener("click", () => {
+    const mk = $("#invoiceModal").dataset.targetMonth;
+    if (!mk) return;
+    confirmAsk("この月の にゅうきんきろくを ぜんぶ けして やりなおしますか？（くりこしも かいじょされます）", () => {
+      resetPayout(mk);
+      showToast("にゅうきんきろくを やりなおせるよ");
+      fillInvoiceModal(mk, { isAuto: false });
+      renderAll();
+    });
   });
 
   $("#invoiceLaterBtn").addEventListener("click", () => {
@@ -662,6 +964,12 @@ function setupEvents() {
 }
 
 // ===== 起動 =====
-setupEvents();
-renderAll();
-queueMicrotask(() => maybeAutoOpenInvoice());
+function startApp() {
+  if (startApp._started) return;
+  startApp._started = true;
+  setupEvents();
+  renderAll();
+  queueMicrotask(() => maybeAutoOpenInvoice());
+}
+
+setupFamilyGate(startApp);
